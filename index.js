@@ -1,7 +1,6 @@
-import { extension_settings } from '../../../extensions.js';
-import { getRequestHeaders } from '../../../../script.js';
-import { SlashCommandParser } from '../../../../slash-commands/SlashCommandParser.js';
-import { SlashCommand } from '../../../../slash-commands/SlashCommand.js';
+// 【修正了正确的导入路径】
+import { getRequestHeaders } from '../../script.js';
+import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 
 const MODULE_NAME = 'st-system-shop';
 let allItems = [];
@@ -10,6 +9,8 @@ const pageSize = 5;
 let currentPoints = 5000;
 
 async function initShop() {
+    console.log("[System Shop] 正在初始化商城插件...");
+    
     // 1. 加载样式表
     const cssLink = document.createElement('link');
     cssLink.rel = 'stylesheet';
@@ -25,35 +26,31 @@ async function initShop() {
     const itemsResponse = await fetch(`/extensions/${MODULE_NAME}/items.json`);
     allItems = await itemsResponse.json();
 
-    // 4. 将入口按钮注入到“魔法笔”菜单中
-    // 酒馆的魔法笔菜单通常是 #extensions_wand_options 或 #slash_commands_options
+    // 4. 将入口按钮注入到“魔法笔”菜单中 (或者聊天框外围)
     const wandMenuItem = `
         <div id="sys-shop-toggle" class="list-group-item flex-container flexGapSm interactable" title="打开系统商城面板">
             <i class="fa-solid fa-store fa-fw"></i> <span>系统商城</span>
         </div>
     `;
     
-    // 兼容不同版本的酒馆魔法笔菜单
+    // 兼容检测：尝试插入魔法笔菜单，如果找不到，就塞进扩展栏
     if ($('#extensions_wand_options').length) {
         $('#extensions_wand_options').append(wandMenuItem);
-    } else if ($('#slash_commands_options').length) {
-        $('#slash_commands_options').append(wandMenuItem);
     } else {
-        // 如果实在找不到，作为一个独立小按钮放在发送按钮旁边
-        $('#send_form').append(`<div id="sys-shop-toggle" class="fa-solid fa-store interactable" style="font-size:1.5em; padding: 10px; cursor: pointer;"></div>`);
+        $('#extensions-menu').prepend(`<div id="sys-shop-toggle" class="drawer-icon fa-solid fa-store" title="系统商城"></div>`);
     }
 
-    // 5. 注册斜杠命令 (输入 /shop 也能打开商城)
+    // 5. 注册斜杠命令
     SlashCommandParser.addCommandObject(SlashCommandParser.registerArgumentCommand(
         () => {
             toggleShopWindow();
             return '';
         },
-        {
-            helpString: '打开专属系统商城面板',
-        },
+        { helpString: '打开专属系统商城面板' },
         'shop'
     ));
+
+    console.log("[System Shop] /shop 命令注册成功！");
 
     // 6. 绑定事件
     bindEvents();
@@ -63,18 +60,17 @@ function toggleShopWindow() {
     const windowEl = $('#system-shop-window');
     if (windowEl.is(':hidden')) {
         windowEl.show();
-        if (currentPage === 1) loadMoreItems(); // 首次打开加载数据
+        if (currentPage === 1) loadMoreItems(); 
     } else {
         windowEl.hide();
     }
 }
 
 function bindEvents() {
-    // 开启/关闭面板 (魔法笔菜单里的按钮)
+    // 魔法笔菜单里的按钮
     $('#sys-shop-toggle').on('click', () => {
         toggleShopWindow();
-        // 点击后自动关闭魔法笔菜单
-        $('#wand_popup').hide();
+        $('#wand_popup').hide(); // 点击后关闭魔法笔菜单
     });
 
     // 关闭按钮
@@ -130,7 +126,7 @@ function loadMoreItems() {
 }
 
 // 购买商品与后置环境响应
-async function handleBuyItem(e) {
+function handleBuyItem(e) {
     const btn = $(e.currentTarget);
     const itemName = btn.data('name');
     const itemPrice = parseInt(btn.data('price'));
@@ -139,18 +135,11 @@ async function handleBuyItem(e) {
         currentPoints -= itemPrice;
         $('#shop-points').text(currentPoints);
         
-        // 发送环境提示到对话中，不操纵角色主观视角
-        const systemPromptText = `[系统提示：宿主 许安 消耗了 ${itemPrice} 积分，成功兑换【${itemName}】。物品已凭空出现在宿主手中。]`;
+        // 【关键改动】利用原生 SlashCommand 执行系统消息，完美契合你的“後置响应”规则
+        // 这样不会强行改变许安的行为，而是给 AI 发送一个客观环境变化
+        const systemPromptText = `宿主 许安 消耗了 ${itemPrice} 积分，成功兑换【${itemName}】。物品已凭空出现在宿主手中。`;
         
-        await fetch('/api/chat/send', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                text: systemPromptText,
-                name: 'System',
-                is_system: true
-            })
-        });
+        SlashCommandParser.executeSlash(`/sys ${systemPromptText}`);
 
         toastr.success(`成功购买：${itemName}`, '系统商城');
     } else {
