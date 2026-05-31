@@ -1,13 +1,13 @@
 {
-    "name": "Virtual Phone System",
-    "display_name": "虚拟智能手机",
-    "version": "1.0.0",
-    "description": "在酒馆内模拟手机生态，包含微信、微博、电话功能，支持独立于主线之外的剧情交互。",
-    "author": "Author",
-    "entrypoint": "index.js",
-    "css": "style.css",
-    "settings": {
-        "is_unlocked": true,
-        "phone_owner": "许安"
-    }
+  "name": "st-system-shop",
+  "display_name": "系统商城",
+  "version": "1.0.0",
+  "description": "一个独立的系统商城面板，支持下拉加载商品，并能以环境提示的形式将购买记录发送至对话中。",
+  "author": "YourName",
+  "main": "index.js",
+  "assets": [
+    "style.css",
+    "shop.html",
+    "items.json"
+  ]
 }
