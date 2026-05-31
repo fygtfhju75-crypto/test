@@ -2,11 +2,7 @@
     const MODULE_NAME = 'virtual-phone';
     let currentActiveWechatChar = null; 
 
-    // 动态在运行时去抓取酒馆公开的全局变量（防止顶层 import 挂掉）
-    function getSillyTavernCore() {
-        return window.SillyTavern?.context || window;
-    }
-
+    // 1. 初始化独立的沙盒本地存储（完全不依赖 extensions.js）
     function initStorage() {
         if (!window.ExtensionSettings) window.ExtensionSettings = {};
         if (!window.ExtensionSettings[MODULE_NAME]) {
@@ -23,10 +19,11 @@
         }
     }
 
+    // 2. 注入手机 UI 结构
     function injectPhoneDOM() {
         if (jQuery('#st-phone-trigger-icon').length > 0) return;
 
-        const iconHtml = `<div id="st-phone-trigger-icon" title="打开虚拟手机">📱</div>`;
+        const iconHtml = `<div id="st-phone-trigger-icon" title="打开虚拟手机" style="position: fixed; bottom: 25px; right: 25px; z-index: 99999; cursor: pointer; font-size: 26px; background: linear-gradient(135deg, #2c3e50, #3498db); padding: 12px; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">📱</div>`;
         jQuery('body').append(iconHtml);
 
         const phoneHtml = `
@@ -37,6 +34,7 @@
                 </div>
                 
                 <div class="phone-screen-content">
+                    <!-- 桌面 -->
                     <div id="phone-app-desktop" class="phone-app-window">
                         <div class="phone-grid-desktop">
                             <div class="desktop-app-item" data-target="wechat-list">
@@ -50,6 +48,7 @@
                         </div>
                     </div>
 
+                    <!-- 微信列表 -->
                     <div id="phone-app-wechat-list" class="phone-app-window" style="display:none;">
                         <div class="wechat-header">
                             <span class="phone-back-nav" data-to="desktop">◀ 桌面</span>
@@ -58,6 +57,7 @@
                         <div id="wechat-contacts-container" style="overflow-y:auto; flex:1;"></div>
                     </div>
 
+                    <!-- 微信聊天内页 -->
                     <div id="phone-app-wechat-chat" class="phone-app-window" style="display:none;">
                         <div class="wechat-header">
                             <span class="phone-back-nav" data-to="wechat-list">◀ 返回</span>
@@ -70,6 +70,7 @@
                         </div>
                     </div>
 
+                    <!-- 微博 -->
                     <div id="phone-app-weibo" class="phone-app-window" style="display:none;">
                         <div class="weibo-header">
                             <span class="phone-back-nav" data-to="desktop">◀ 桌面</span>
@@ -85,20 +86,19 @@
             </div>
         `;
         jQuery('body').append(phoneHtml);
-        updateClock();
-        setInterval(updateClock, 30000);
-    }
-
-    function updateClock() {
-        const now = new Date();
-        const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
-        jQuery('#st-phone-clock').text(timeStr);
+        
+        // 每隔30秒更新手机时间
+        const setClock = () => {
+            const now = new Date();
+            jQuery('#st-phone-clock').text(now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0'));
+        };
+        setClock();
+        setInterval(setClock, 30000);
     }
 
     function switchScreen(targetScreenName) {
         jQuery('.phone-app-window').hide();
         jQuery(`#phone-app-${targetScreenName}`).show();
-
         if (targetScreenName === 'wechat-list') renderWechatContacts();
         if (targetScreenName === 'weibo') renderWeiboTimeline();
     }
@@ -107,8 +107,8 @@
         const container = jQuery('#wechat-contacts-container');
         container.empty();
         
-        // 兼容性获取角色列表
-        const chars = window.characters || [];
+        // 动态抓取全局角色
+        const chars = window.characters || window.SillyTavern?.characters || [];
         if (chars.length === 0) {
             container.append('<div style="padding:15px; color:#888;">暂无联系人，请先在酒馆导入角色卡</div>');
             return;
@@ -142,54 +142,50 @@
             const bubbleClass = msg.sender === 'user' ? 'user' : 'char';
             wall.append(`<div class="wechat-bubble ${bubbleClass}">${msg.text}</div>`);
         });
-        
         wall.scrollTop(wall.prop("scrollHeight"));
     }
 
     function renderWeiboTimeline() {
         const wall = jQuery('#weibo-timeline-wall');
         wall.empty();
-        const list = window.ExtensionSettings[MODULE_NAME].weibo_list;
-        list.forEach(item => {
-            wall.append(`
-                <div class="weibo-card">
-                    <div class="weibo-author">@${item.author}</div>
-                    <div class="weibo-body">${item.content}</div>
-                </div>
-            `);
+        window.ExtensionSettings[MODULE_NAME].weibo_list.forEach(item => {
+            wall.append(`<div class="weibo-card"><div class="weibo-author">@${item.author}</div><div class="weibo-body">${item.content}</div></div>`);
         });
     }
 
-    function handleMessageInterception(messageId) {
-        const element = document.querySelector(`[data-id="${messageId}"]`);
-        if (!element) return;
-        const textContainer = element.querySelector('.mes_text');
-        if (!textContainer) return;
+    // 后置信令拦截器：直接挂载到 DOM 树变动监听，不依赖原生 eventSource
+    function startDomInterceptor() {
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === 1 && (node.classList?.contains('mes') || node.querySelector?.('.mes_text'))) {
+                        const textContainer = node.querySelector('.mes_text');
+                        if (!textContainer) continue;
 
-        const commandRegex = /\[微信来信：(.+?)\|(.+?)\]/g;
-        let match;
+                        const commandRegex = /\[微信来信：(.+?)\|(.+?)\]/g;
+                        let match;
+                        while ((match = commandRegex.exec(textContainer.innerHTML)) !== null) {
+                            const charName = match[1].trim();
+                            const msgContent = match[2].trim();
 
-        while ((match = commandRegex.exec(textContainer.innerHTML)) !== null) {
-            const charName = match[1].trim();
-            const msgContent = match[2].trim();
+                            if (!window.ExtensionSettings[MODULE_NAME].wechat_history[charName]) {
+                                window.ExtensionSettings[MODULE_NAME].wechat_history[charName] = [];
+                            }
+                            window.ExtensionSettings[MODULE_NAME].wechat_history[charName].push({ sender: 'char', text: msgContent });
+                            if (window.saveSettingsDebounced) window.saveSettingsDebounced();
 
-            if (!window.ExtensionSettings[MODULE_NAME].wechat_history[charName]) {
-                window.ExtensionSettings[MODULE_NAME].wechat_history[charName] = [];
+                            if (currentActiveWechatChar === charName && jQuery('#phone-app-wechat-chat').is(':visible')) {
+                                renderWechatChatroom(charName);
+                            }
+                        }
+                        if (textContainer.innerHTML.includes('[微信来信：')) {
+                            textContainer.innerHTML = textContainer.innerHTML.replace(/\[微信来信：.+?\|.+?\]/g, '<span style="color:#666; font-size:12px; font-style:italic;">（收到一条手机微信，请打开手机查看）</span>');
+                        }
+                    }
+                }
             }
-            window.ExtensionSettings[MODULE_NAME].wechat_history[charName].push({
-                sender: 'char',
-                text: msgContent
-            });
-            if (window.saveSettingsDebounced) window.saveSettingsDebounced();
-
-            if (currentActiveWechatChar === charName && jQuery('#phone-app-wechat-chat').is(':visible')) {
-                renderWechatChatroom(charName);
-            }
-        }
-
-        if (textContainer.innerHTML.includes('[微信来信：')) {
-            textContainer.innerHTML = textContainer.innerHTML.replace(/\[微信来信：.+?\|.+?\]/g, '<span style="color:#666; font-size:12px; font-style:italic;">（收到一条手机微信，请打开手机查看）</span>');
-        }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
     }
 
     async function sendWechatMessage() {
@@ -197,101 +193,59 @@
         const text = inputField.val().trim();
         if (!text || !currentActiveWechatChar) return;
 
-        if (!window.ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar]) {
-            window.ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar] = [];
-        }
-
-        window.ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar].push({
-            sender: 'user',
-            text: text
-        });
+        window.ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar].push({ sender: 'user', text: text });
         inputField.val('');
         renderWechatChatroom(currentActiveWechatChar);
         if (window.saveSettingsDebounced) window.saveSettingsDebounced();
 
-        const chars = window.characters || [];
+        const chars = window.characters || window.SillyTavern?.characters || [];
         const targetCharObj = chars.find(c => c.name === currentActiveWechatChar);
         if (!targetCharObj) return;
 
-        const silentPrompt = `【系统通知：当前处于虚拟手机微信聊天沙盒环境，请你完全站在你的人设、记忆和立场上，针对玩家发来的微信进行一行字的短回复。微信内容如下："${text}"】`;
-        
         try {
             const response = await fetch('/api/character/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     character: targetCharObj.name,
-                    prompt: silentPrompt,
+                    prompt: `【系统通知：当前处于虚拟手机微信聊天沙盒环境，请你完全站在你的人设、记忆和立场上，针对玩家发来的微信进行短回复。微信内容如下："${text}"】`,
                 })
             });
-            
             if (response.ok) {
                 const data = await response.json();
-                const replyText = data.reply || "（对方暂未回复）";
-                
-                window.ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar].push({
-                    sender: 'char',
-                    text: replyText
-                });
+                window.ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar].push({ sender: 'char', text: data.reply || "（对方暂未回复）" });
                 renderWechatChatroom(currentActiveWechatChar);
                 if (window.saveSettingsDebounced) window.saveSettingsDebounced();
             }
         } catch (err) {
-            console.error("[Virtual Phone] 微信生成失败: ", err);
+            console.error("[Virtual Phone] 微信发送失败: ", err);
         }
     }
 
-    // 传统 jQuery 加载逻辑
-    jQuery(async () => {
-        initStorage();
-        injectPhoneDOM();
+    // 独立循环初始化（每秒检查一次 jQuery 是否就绪，就绪即强行注入）
+    const initTimer = setInterval(() => {
+        if (typeof jQuery !== 'undefined' && jQuery('body').length > 0) {
+            clearInterval(initTimer);
+            
+            initStorage();
+            injectPhoneDOM();
+            startDomInterceptor();
 
-        const settingsHtml = `
-            <div class="virtual_phone_settings_block">
-                <h4>📱 虚拟智能手机</h4>
-                <button id="st-phone-force-open-btn" class="menu_button">强制唤醒手机</button>
-            </div>
-        `;
-        jQuery('#extensions_settings').append(settingsHtml);
+            // 强行塞入右侧设置栏（如果存在）
+            const settingsHtml = `<div class="virtual_phone_settings_block"><h4>📱 虚拟智能手机</h4><button id="st-phone-force-open-btn" style="padding:5px 10px; background:#2c3e50; color:#fff; border:none; border-radius:4px; cursor:pointer;">强制唤醒手机</button></div>`;
+            jQuery('#extensions_settings').append(settingsHtml);
 
-        jQuery('#st-phone-force-open-btn').on('click', () => {
-            jQuery('#st-phone-wrapper').toggle(200);
-        });
+            // 事件绑定
+            jQuery('#st-phone-force-open-btn').on('click', () => jQuery('#st-phone-wrapper').toggle(200));
+            jQuery(document).on('click', '#st-phone-trigger-icon', () => jQuery('#st-phone-wrapper').toggle(200));
+            jQuery('#st-phone-home-btn').on('click', () => { currentActiveWechatChar = null; switchScreen('desktop'); });
+            jQuery(document).on('click', '.desktop-app-item', function() { switchScreen(jQuery(this).data('target')); });
+            jQuery(document).on('click', '.phone-back-nav', function() { switchScreen(jQuery(this).data('to')); });
+            jQuery(document).on('click', '.wechat-contact-item', function() { switchScreen('wechat-chat'); renderWechatChatroom(jQuery(this).data('name')); });
+            jQuery('#wechat-send-btn').on('click', sendWechatMessage);
+            jQuery('#wechat-typed-input').on('keypress', (e) => { if (e.which === 13) sendWechatMessage(); });
 
-        jQuery(document).on('click', '#st-phone-trigger-icon', () => {
-            jQuery('#st-phone-wrapper').toggle(200);
-        });
-
-        jQuery('#st-phone-home-btn').on('click', () => {
-            currentActiveWechatChar = null;
-            switchScreen('desktop');
-        });
-
-        jQuery(document).on('click', '.desktop-app-item', function() {
-            const dest = jQuery(this).data('target');
-            switchScreen(dest);
-        });
-
-        jQuery(document).on('click', '.phone-back-nav', function() {
-            const to = jQuery(this).data('to');
-            switchScreen(to);
-        });
-
-        jQuery(document).on('click', '.wechat-contact-item', function() {
-            const name = jQuery(this).data('name');
-            switchScreen('wechat-chat');
-            renderWechatChatroom(name);
-        });
-
-        jQuery('#wechat-send-btn').on('click', sendWechatMessage);
-        jQuery('#wechat-typed-input').on('keypress', (e) => {
-            if (e.which === 13) sendWechatMessage();
-        });
-
-        if (window.eventSource && window.event_types) {
-            window.eventSource.on(window.event_types.CHARACTER_MESSAGE_RENDERED, handleMessageInterception);
+            console.log('==== [Virtual Phone System] 独立运行版挂载成功 ====');
         }
-
-        console.log('==== [Virtual Phone System] 传统兼容模式加载成功 ====');
-    });
+    }, 1000);
 })();
