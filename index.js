@@ -2,18 +2,16 @@ import { eventSource, event_types, characters, getContext } from '../../../scrip
 import { ExtensionSettings, saveSettingsDebounced } from '../../extensions.js';
 
 const MODULE_NAME = 'virtual-phone';
-let currentActiveWechatChar = null; // 当前正在微信畅聊的角色名
+let currentActiveWechatChar = null; 
 
-// 1. 初始化本地持久化配置
 function initStorage() {
     if (!ExtensionSettings[MODULE_NAME]) {
         ExtensionSettings[MODULE_NAME] = {};
     }
     if (!ExtensionSettings[MODULE_NAME].wechat_history) {
-        ExtensionSettings[MODULE_NAME].wechat_history = {}; // 存储结构: { "角色名": [{sender: 'user'/'char', text: '内容'}] }
+        ExtensionSettings[MODULE_NAME].wechat_history = {}; 
     }
     if (!ExtensionSettings[MODULE_NAME].weibo_list) {
-        // 初始化一些世界观背景的朋友圈/微博动态
         ExtensionSettings[MODULE_NAME].weibo_list = [
             { author: "系统新闻公告", content: "今日市内秩序井然，请各位市民遭遇异变切勿惊慌，紧跟安全区指令。" },
             { author: "未知避难所", content: "有人在城西看到林欣了吗？她带走了最后的血清样本！" }
@@ -21,13 +19,13 @@ function initStorage() {
     }
 }
 
-// 2. 渲染主骨架 HTML 结构
 function injectPhoneDOM() {
-    // 注入快捷悬浮图标
+    // 防止重复注入
+    if ($('#st-phone-trigger-icon').length > 0) return;
+
     const iconHtml = `<div id="st-phone-trigger-icon" title="打开虚拟手机">📱</div>`;
     $('body').append(iconHtml);
 
-    // 注入手机本体
     const phoneHtml = `
         <div id="st-phone-wrapper" style="display: none;">
             <div class="phone-top-bar">
@@ -36,7 +34,6 @@ function injectPhoneDOM() {
             </div>
             
             <div class="phone-screen-content">
-                
                 <div id="phone-app-desktop" class="phone-app-window">
                     <div class="phone-grid-desktop">
                         <div class="desktop-app-item" data-target="wechat-list">
@@ -77,7 +74,6 @@ function injectPhoneDOM() {
                     </div>
                     <div class="weibo-timeline" id="weibo-timeline-wall"></div>
                 </div>
-
             </div>
 
             <div class="phone-bottom-home" id="st-phone-home-btn">
@@ -90,14 +86,12 @@ function injectPhoneDOM() {
     setInterval(updateClock, 30000);
 }
 
-// 更新手机系统时间
 function updateClock() {
     const now = new Date();
     const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
     $('#st-phone-clock').text(timeStr);
 }
 
-// 3. UI 导航与渲染引擎逻辑
 function switchScreen(targetScreenName) {
     $('.phone-app-window').hide();
     $(`#phone-app-${targetScreenName}`).show();
@@ -106,13 +100,16 @@ function switchScreen(targetScreenName) {
     if (targetScreenName === 'weibo') renderWeiboTimeline();
 }
 
-// 渲染微信联系人
 function renderWechatContacts() {
     const container = $('#wechat-contacts-container');
     container.empty();
     
-    // 获取酒馆中所有已导入的角色卡作为联系人
-    characters.forEach((char, index) => {
+    if (!characters || characters.length === 0) {
+        container.append('<div style="padding:15px; color:#888;">暂无联系人，请先在酒馆导入角色卡</div>');
+        return;
+    }
+
+    characters.forEach((char) => {
         const history = ExtensionSettings[MODULE_NAME].wechat_history[char.name] || [];
         const lastMsg = history.length > 0 ? history[history.length - 1].text : '[暂无新聊天动态]';
         
@@ -129,7 +126,6 @@ function renderWechatContacts() {
     });
 }
 
-// 渲染特定角色的微信会话气泡
 function renderWechatChatroom(charName) {
     currentActiveWechatChar = charName;
     $('#wechat-chat-title').text(charName);
@@ -142,11 +138,9 @@ function renderWechatChatroom(charName) {
         wall.append(`<div class="wechat-bubble ${bubbleClass}">${msg.text}</div>`);
     });
     
-    // 滚动到底部
     wall.scrollTop(wall.prop("scrollHeight"));
 }
 
-// 渲染微博信息流
 function renderWeiboTimeline() {
     const wall = $('#weibo-timeline-wall');
     wall.empty();
@@ -161,25 +155,19 @@ function renderWeiboTimeline() {
     });
 }
 
-// 4. 后置响应核心：拦截酒馆大模型主轨，捕获“暗桩控制指令”
-// 规则：当大模型输出 `[微信来信: 名字|消息]` 时，剥离此内容并推送到手机内
 function handleMessageInterception(messageId) {
-    // 获取刚刚渲染完的最新一条 DOM
     const element = document.querySelector(`[data-id="${messageId}"]`);
     if (!element) return;
     const textContainer = element.querySelector('.mes_text');
     if (!textContainer) return;
 
-    let rawText = textContainer.innerHTML;
-    // 匹配标签格式：[微信来信: 角色名|具体消息内容]
     const commandRegex = /\[微信来信：(.+?)\|(.+?)\]/g;
     let match;
 
-    while ((match = commandRegex.exec(rawText)) !== null) {
+    while ((match = commandRegex.exec(textContainer.innerHTML)) !== null) {
         const charName = match[1].trim();
         const msgContent = match[2].trim();
 
-        // 1. 将数据塞入插件沙盒存储
         if (!ExtensionSettings[MODULE_NAME].wechat_history[charName]) {
             ExtensionSettings[MODULE_NAME].wechat_history[charName] = [];
         }
@@ -189,25 +177,25 @@ function handleMessageInterception(messageId) {
         });
         saveSettingsDebounced();
 
-        // 2. 如果此时玩家正开着该角色的手机微信聊天内页，实时为他刷新视图
         if (currentActiveWechatChar === charName && $('#phone-app-wechat-chat').is(':visible')) {
             renderWechatChatroom(charName);
         }
     }
 
-    // 3. 后置清洁：将这类控制信令从主聊天的公用屏幕上悄悄擦除，对用户保持剧情隐蔽
-    if (commandRegex.test(textContainer.innerHTML)) {
+    if (textContainer.innerHTML.includes('[微信来信：')) {
         textContainer.innerHTML = textContainer.innerHTML.replace(/\[微信来信：.+?\|.+?\]/g, '<span style="color:#666; font-size:12px; font-style:italic;">（收到一条手机微信，请打开手机查看）</span>');
     }
 }
 
-// 5. 手机端独立主动给 AI 发微信的事件处理
 async function sendWechatMessage() {
     const inputField = $('#wechat-typed-input');
     const text = inputField.val().trim();
     if (!text || !currentActiveWechatChar) return;
 
-    // A. 塞入用户气泡并上屏
+    if (!ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar]) {
+        ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar] = [];
+    }
+
     ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar].push({
         sender: 'user',
         text: text
@@ -216,30 +204,18 @@ async function sendWechatMessage() {
     renderWechatChatroom(currentActiveWechatChar);
     saveSettingsDebounced();
 
-    // B. 【沙盒独立思考调用】借助酒馆上下文向对应角色发起暗度陈仓的静默 Prompt
-    const context = getContext();
     const targetCharObj = characters.find(c => c.name === currentActiveWechatChar);
-    
-    if (!targetCharObj) {
-        setTimeout(() => {
-            ExtensionSettings[MODULE_NAME].wechat_history[currentActiveWechatChar].push({ sender: 'char', text: '[系统提示: 该联系人已不在服务区]' });
-            renderWechatChatroom(currentActiveWechatChar);
-        }, 1000);
-        return;
-    }
+    if (!targetCharObj) return;
 
-    // 构造一个不打扰主线剧情的临时 OOC 指令，强制其在微信沙盒内用角色卡人设进行回复
     const silentPrompt = `【系统通知：当前处于虚拟手机微信聊天沙盒环境，请你完全站在你的人设、记忆和立场上，针对玩家发来的微信进行一行字的短回复。微信内容如下："${text}"】`;
     
     try {
-        // 调用 SillyTavern 原生底层 API 发起单次会话请求
         const response = await fetch('/api/character/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 character: targetCharObj.name,
                 prompt: silentPrompt,
-                // 复用用户当前的 API endpoints 与设定
             })
         });
         
@@ -255,27 +231,40 @@ async function sendWechatMessage() {
             saveSettingsDebounced();
         }
     } catch (err) {
-        console.error("[Virtual Phone] 跨域调用独立微信生成失败: ", err);
+        console.error("[Virtual Phone] 微信生成失败: ", err);
     }
 }
 
-// 6. 绑定 UI 与全局生命周期钩子
+// 核心初始化入口
 jQuery(async () => {
     initStorage();
     injectPhoneDOM();
 
-    // 开关手机主面板
-    $('#st-phone-trigger-icon').on('click', () => {
+    // 这一步是将你的插件注册到右侧的 Extensions 下拉菜单中
+    const settingsHtml = `
+        <div class="virtual_phone_settings_block">
+            <h4>📱 虚拟智能手机</h4>
+            <p style="font-size:12px; color:#aaa;">插件已在右下角挂载。如果找不到手机图标，可以点击下方按钮强制呼出：</p>
+            <button id="st-phone-force-open-btn" class="menu_button menu_button_icon">强制唤醒手机</button>
+        </div>
+    `;
+    $('#extensions_settings').append(settingsHtml);
+
+    // 绑定强制唤醒按钮
+    $('#st-phone-force-open-btn').on('click', () => {
         $('#st-phone-wrapper').toggle(200);
     });
 
-    // 虚拟底座 Home 键返回桌面
+    // 悬浮图标点击
+    $(document).on('click', '#st-phone-trigger-icon', () => {
+        $('#st-phone-wrapper').toggle(200);
+    });
+
     $('#st-phone-home-btn').on('click', () => {
         currentActiveWechatChar = null;
         switchScreen('desktop');
     });
 
-    // 导航项点击
     $(document).on('click', '.desktop-app-item', function() {
         const dest = $(this).data('target');
         switchScreen(dest);
@@ -286,20 +275,17 @@ jQuery(async () => {
         switchScreen(to);
     });
 
-    // 点击微信列表里的某个人，进入专属聊天室
     $(document).on('click', '.wechat-contact-item', function() {
         const name = $(this).data('name');
         switchScreen('wechat-chat');
         renderWechatChatroom(name);
     });
 
-    // 微信发送事件绑定
     $('#wechat-send-btn').on('click', sendWechatMessage);
     $('#wechat-typed-input').on('keypress', (e) => {
         if (e.which === 13) sendWechatMessage();
     });
 
-    // 核心事件：监听 AI 在大本营主线输出的消息渲染，捕捉微信短信
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, handleMessageInterception);
 
     console.log('==== [Virtual Phone System] 全功能拟真手机系统加载成功 ====');
