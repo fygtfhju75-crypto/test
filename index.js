@@ -1,11 +1,13 @@
 import { extension_settings } from '../../../extensions.js';
 import { getRequestHeaders } from '../../../../script.js';
+import { SlashCommandParser } from '../../../../slash-commands/SlashCommandParser.js';
+import { SlashCommand } from '../../../../slash-commands/SlashCommand.js';
 
 const MODULE_NAME = 'st-system-shop';
 let allItems = [];
 let currentPage = 1;
-const pageSize = 5; // 每次加载5个以便测试下拉效果
-let currentPoints = 5000; // 初始测试积分
+const pageSize = 5;
+let currentPoints = 5000;
 
 async function initShop() {
     // 1. 加载样式表
@@ -19,30 +21,60 @@ async function initShop() {
     const htmlText = await htmlResponse.text();
     $('body').append(htmlText);
 
-    // 3. 在右侧顶部工具栏添加商城入口按钮
-    const btnHtml = `
-        <div id="sys-shop-toggle" class="drawer-icon fa-solid fa-store" title="系统商城" style="cursor: pointer;"></div>
-    `;
-    $('#extensions-menu').prepend(btnHtml);
-
-    // 4. 获取商品数据
+    // 3. 获取商品数据
     const itemsResponse = await fetch(`/extensions/${MODULE_NAME}/items.json`);
     allItems = await itemsResponse.json();
 
-    // 5. 绑定事件
+    // 4. 将入口按钮注入到“魔法笔”菜单中
+    // 酒馆的魔法笔菜单通常是 #extensions_wand_options 或 #slash_commands_options
+    const wandMenuItem = `
+        <div id="sys-shop-toggle" class="list-group-item flex-container flexGapSm interactable" title="打开系统商城面板">
+            <i class="fa-solid fa-store fa-fw"></i> <span>系统商城</span>
+        </div>
+    `;
+    
+    // 兼容不同版本的酒馆魔法笔菜单
+    if ($('#extensions_wand_options').length) {
+        $('#extensions_wand_options').append(wandMenuItem);
+    } else if ($('#slash_commands_options').length) {
+        $('#slash_commands_options').append(wandMenuItem);
+    } else {
+        // 如果实在找不到，作为一个独立小按钮放在发送按钮旁边
+        $('#send_form').append(`<div id="sys-shop-toggle" class="fa-solid fa-store interactable" style="font-size:1.5em; padding: 10px; cursor: pointer;"></div>`);
+    }
+
+    // 5. 注册斜杠命令 (输入 /shop 也能打开商城)
+    SlashCommandParser.addCommandObject(SlashCommandParser.registerArgumentCommand(
+        () => {
+            toggleShopWindow();
+            return '';
+        },
+        {
+            helpString: '打开专属系统商城面板',
+        },
+        'shop'
+    ));
+
+    // 6. 绑定事件
     bindEvents();
 }
 
+function toggleShopWindow() {
+    const windowEl = $('#system-shop-window');
+    if (windowEl.is(':hidden')) {
+        windowEl.show();
+        if (currentPage === 1) loadMoreItems(); // 首次打开加载数据
+    } else {
+        windowEl.hide();
+    }
+}
+
 function bindEvents() {
-    // 开启/关闭面板
+    // 开启/关闭面板 (魔法笔菜单里的按钮)
     $('#sys-shop-toggle').on('click', () => {
-        const windowEl = $('#system-shop-window');
-        if (windowEl.is(':hidden')) {
-            windowEl.show();
-            if (currentPage === 1) loadMoreItems(); // 首次打开加载数据
-        } else {
-            windowEl.hide();
-        }
+        toggleShopWindow();
+        // 点击后自动关闭魔法笔菜单
+        $('#wand_popup').hide();
     });
 
     // 关闭按钮
@@ -50,7 +82,7 @@ function bindEvents() {
         $('#system-shop-window').hide();
     });
 
-    // 窗口拖拽 (利用 ST 内置的 jQuery UI)
+    // 窗口拖拽
     $('#system-shop-window').draggable({
         handle: '.shop-header',
         containment: 'window'
@@ -59,7 +91,6 @@ function bindEvents() {
     // 绑定下拉加载
     const listContainer = $('#shop-item-list');
     listContainer.on('scroll', function() {
-        // 触底检测
         if ($(this).scrollTop() + $(this).innerHeight() >= $(this)[0].scrollHeight - 10) {
             loadMoreItems();
         }
@@ -94,9 +125,7 @@ function loadMoreItems() {
         listContainer.append(itemHtml);
     });
 
-    // 绑定购买按钮点击事件（防止重复绑定，用 off 再 on）
     $('.buy-btn').off('click').on('click', handleBuyItem);
-
     currentPage++;
 }
 
@@ -107,21 +136,19 @@ async function handleBuyItem(e) {
     const itemPrice = parseInt(btn.data('price'));
 
     if (currentPoints >= itemPrice) {
-        // 1. 扣除积分并更新 UI
         currentPoints -= itemPrice;
         $('#shop-points').text(currentPoints);
         
-        // 2. 发送环境提示到对话中 (信息隔离：通过系统发送客观事件，让环境驱动发展)
+        // 发送环境提示到对话中，不操纵角色主观视角
         const systemPromptText = `[系统提示：宿主 许安 消耗了 ${itemPrice} 积分，成功兑换【${itemName}】。物品已凭空出现在宿主手中。]`;
         
-        // 调用 ST 内置方法发送静默系统消息到当前对话
         await fetch('/api/chat/send', {
             method: 'POST',
             headers: getRequestHeaders(),
             body: JSON.stringify({
                 text: systemPromptText,
                 name: 'System',
-                is_system: true // 标记为系统消息
+                is_system: true
             })
         });
 
@@ -131,7 +158,6 @@ async function handleBuyItem(e) {
     }
 }
 
-// 启动插件
 jQuery(document).ready(function () {
     initShop();
 });
