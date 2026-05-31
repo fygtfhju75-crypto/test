@@ -1,0 +1,13 @@
+{
+    "name": "Virtual Phone System",
+    "display_name": "虚拟智能手机",
+    "version": "1.0.0",
+    "description": "在酒馆内模拟手机生态，包含微信、微博、电话功能，支持独立于主线之外的剧情交互。",
+    "author": "Author",
+    "entrypoint": "index.js",
+    "css": "style.css",
+    "settings": {
+        "is_unlocked": true,
+        "phone_owner": "许安"
+    }
+}
