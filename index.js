@@ -1,6 +1,4 @@
-// 【修正了正确的导入路径】
-import { getRequestHeaders } from '../../script.js';
-import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
+// 【彻底去除了 import，使用全局变量解决 404 路径报错问题】
 
 const MODULE_NAME = 'st-system-shop';
 let allItems = [];
@@ -18,39 +16,50 @@ async function initShop() {
     document.head.appendChild(cssLink);
 
     // 2. 加载 UI HTML 并注入页面
-    const htmlResponse = await fetch(`/extensions/${MODULE_NAME}/shop.html`);
-    const htmlText = await htmlResponse.text();
-    $('body').append(htmlText);
+    try {
+        const htmlResponse = await fetch(`/extensions/${MODULE_NAME}/shop.html`);
+        const htmlText = await htmlResponse.text();
+        $('body').append(htmlText);
+    } catch (error) {
+        console.error("[System Shop] 加载 HTML 失败:", error);
+    }
 
     // 3. 获取商品数据
-    const itemsResponse = await fetch(`/extensions/${MODULE_NAME}/items.json`);
-    allItems = await itemsResponse.json();
+    try {
+        const itemsResponse = await fetch(`/extensions/${MODULE_NAME}/items.json`);
+        allItems = await itemsResponse.json();
+    } catch (error) {
+        console.error("[System Shop] 加载商品 JSON 失败:", error);
+    }
 
-    // 4. 将入口按钮注入到“魔法笔”菜单中 (或者聊天框外围)
+    // 4. 将入口按钮注入到“魔法笔”菜单中
     const wandMenuItem = `
         <div id="sys-shop-toggle" class="list-group-item flex-container flexGapSm interactable" title="打开系统商城面板">
             <i class="fa-solid fa-store fa-fw"></i> <span>系统商城</span>
         </div>
     `;
     
-    // 兼容检测：尝试插入魔法笔菜单，如果找不到，就塞进扩展栏
     if ($('#extensions_wand_options').length) {
         $('#extensions_wand_options').append(wandMenuItem);
     } else {
+        // 备用方案：如果找不到魔法笔菜单，强行塞到右上角扩展栏
         $('#extensions-menu').prepend(`<div id="sys-shop-toggle" class="drawer-icon fa-solid fa-store" title="系统商城"></div>`);
     }
 
-    // 5. 注册斜杠命令
-    SlashCommandParser.addCommandObject(SlashCommandParser.registerArgumentCommand(
-        () => {
-            toggleShopWindow();
-            return '';
-        },
-        { helpString: '打开专属系统商城面板' },
-        'shop'
-    ));
-
-    console.log("[System Shop] /shop 命令注册成功！");
+    // 5. 注册斜杠命令 (使用酒馆的全局 SlashCommandParser)
+    if (window.SlashCommandParser) {
+        window.SlashCommandParser.addCommandObject(window.SlashCommandParser.registerArgumentCommand(
+            () => {
+                toggleShopWindow();
+                return '';
+            },
+            { helpString: '打开专属系统商城面板' },
+            'shop'
+        ));
+        console.log("[System Shop] /shop 命令注册成功！");
+    } else {
+        console.warn("[System Shop] 未检测到全局 SlashCommandParser。");
+    }
 
     // 6. 绑定事件
     bindEvents();
@@ -135,18 +144,20 @@ function handleBuyItem(e) {
         currentPoints -= itemPrice;
         $('#shop-points').text(currentPoints);
         
-        // 【关键改动】利用原生 SlashCommand 执行系统消息，完美契合你的“後置响应”规则
-        // 这样不会强行改变许安的行为，而是给 AI 发送一个客观环境变化
+        // 发送环境提示，作为外部刺激驱动剧情，保持角色信息隔离
         const systemPromptText = `宿主 许安 消耗了 ${itemPrice} 积分，成功兑换【${itemName}】。物品已凭空出现在宿主手中。`;
         
-        SlashCommandParser.executeSlash(`/sys ${systemPromptText}`);
-
+        if (window.SlashCommandParser) {
+            window.SlashCommandParser.executeSlash(`/sys ${systemPromptText}`);
+        }
+        
         toastr.success(`成功购买：${itemName}`, '系统商城');
     } else {
         toastr.warning('积分不足！', '系统商城');
     }
 }
 
+// 等待 DOM 加载完毕后启动
 jQuery(document).ready(function () {
     initShop();
 });
